@@ -6,12 +6,13 @@
   <p class="muted">Only admins can see this. Discord itself never learns who pressed send.</p>
   {% if rows %}
   <table>
-    <thead><tr><th>When (UTC)</th><th>Account</th><th>Webhook</th><th>Excerpt</th><th>Status</th></tr></thead>
+    <thead><tr><th>When (UTC)</th><th>Account</th><th>IP</th><th>Webhook</th><th>Excerpt</th><th>Status</th></tr></thead>
     <tbody>
       {% for r in rows %}
       <tr>
         <td class="muted">{{ r.created_at }}</td>
         <td class="strong">{{ r.username }}</td>
+        <td class="muted mono">{{ r.ip or "—" }}</td>
         <td>{{ r.webhook }}</td>
         <td class="muted excerpt">{{ r.excerpt }}</td>
         <td>{% if r.status == 'sent' %}<span class="tag tag-ok">sent</span>{% else %}<span class="tag tag-bad">{{ r.status }}</span>{% endif %}</td>

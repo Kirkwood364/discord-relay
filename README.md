@@ -39,16 +39,37 @@ Users sign in, pick a destination, write their message with a live preview, and 
 | `ADMIN_PASSWORD` | random (printed once in logs) | Password for the bootstrap admin account, first run only |
 | `ADMIN_USERNAME` | `admin` | Username for the bootstrap admin account, first run only |
 | `SECRET_KEY` | auto-generated, persisted in `/data` | Flask session signing key |
+| `RELAY_PROXY_HOPS` | `0` | Reverse proxies to trust for real client IPs (`1` behind NPM/Caddy) |
+| `RELAY_HTTPS` | `0` | Set `1` when served over TLS: Secure cookies + HSTS |
+| `RELAY_SESSION_HOURS` | `12` | Login session lifetime |
+| `RELAY_MAX_FILE_MB` | `10` | Per-file attachment limit (raise for boosted servers) |
 | `DATA_DIR` | `/data` | Where the SQLite database and secret key live |
 
 All state lives in the `/data` volume (`relay-data` in docker-compose), so the container itself is disposable.
 
-## Deployment notes
+## Security & deployment
 
-- Run it **behind a reverse proxy with TLS** (Caddy, nginx, Traefik). The app speaks plain HTTP on port 8080; login credentials should never travel unencrypted.
-- If you serve it over HTTPS, consider adding `SESSION_COOKIE_SECURE=True` to `app.config` in `app.py`.
-- Don't expose it directly to the internet unless you have to — a VPN or IP allowlist is a good fit for an internal admin tool.
-- Back up the `relay-data` volume; it contains the accounts, webhook URLs, and audit log.
+Hardening that's built in:
+
+- **Login rate limiting** — 5 failed attempts locks a username, 10 locks a client IP, for 15 minutes. Failures and throttles are logged to the container output. Limits are tracked in SQLite, so they hold across workers and restarts.
+- **Timing-safe login** — unknown usernames take as long to reject as wrong passwords.
+- **Sessions expire** after `RELAY_SESSION_HOURS` (default 12).
+- **Security headers** on every response: a strict Content-Security-Policy (no inline scripts), `X-Frame-Options: DENY`, `nosniff`, referrer policy, and HSTS when `RELAY_HTTPS=1`.
+- **Non-root container** — the app runs as an unprivileged user.
+- CSRF protection on all forms, `@everyone`/user pings always stripped, role pings only for admin-registered roles, webhook URLs never exposed to non-admins, admin-only audit log with client IPs.
+
+Running behind a reverse proxy (nginx proxy manager, Caddy, Traefik):
+
+1. Set `RELAY_PROXY_HOPS=1` and `RELAY_HTTPS=1` (already set in `docker-compose.yml`). Without `RELAY_PROXY_HOPS`, rate limiting and the audit log would see the proxy's IP for everyone; leave it at `0` only if the app is exposed directly, since trusting forwarded headers from arbitrary clients would let them spoof their IP.
+2. In nginx proxy manager, enable **Force SSL** and add to the proxy host's Advanced config so large attachments survive the proxy:
+
+   ```nginx
+   client_max_body_size 102m;
+   ```
+
+3. Strongly consider an **Access List** (IP allowlist or basic auth) in front. This is a tool for a handful of trusted people — reducing who can even reach the login page removes most of the risk of public exposure.
+
+Back up the `relay-data` volume; it contains the accounts, webhook URLs, and audit log.
 
 ## Project layout
 

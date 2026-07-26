@@ -14,8 +14,9 @@
   const roleBar = document.getElementById("role-bar");
   const roleChips = document.getElementById("role-chips");
 
-  const rolesByHook = JSON.parse(document.getElementById("roles-data").textContent || "{}");
-  const limits = window.RELAY_LIMITS || { maxFiles: 10, maxFileMB: 10 };
+  const relayData = JSON.parse(document.getElementById("relay-data").textContent || "{}");
+  const rolesByHook = relayData.roles || {};
+  const limits = relayData.limits || { maxFiles: 10, maxFileMB: 10 };
   let objectUrls = [];
 
   function esc(s) {

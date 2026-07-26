@@ -9,7 +9,16 @@ services:
       # Set this before first run, or a random admin password
       # will be generated and printed once in the container logs.
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
+      # Behind a reverse proxy (nginx proxy manager, Caddy, ...):
+      # number of proxy hops to trust for real client IPs.
+      # Leave at 0 if the app is exposed directly.
+      - RELAY_PROXY_HOPS=1
+      # Serving over HTTPS via the proxy: marks cookies Secure + enables HSTS.
+      - RELAY_HTTPS=1
+      # How long a login lasts before users must sign in again.
+      - RELAY_SESSION_HOURS=12
       # - ADMIN_USERNAME=admin
+      # - RELAY_MAX_FILE_MB=10   # raise for boosted servers
       # - SECRET_KEY=            # optional; auto-generated and persisted if unset
     restart: unless-stopped
 

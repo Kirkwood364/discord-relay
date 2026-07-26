@@ -13,7 +13,7 @@ import os
 import re
 import secrets
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from functools import wraps
 
 import requests
@@ -48,17 +48,71 @@ else:
 MAX_FILE_MB = int(os.environ.get("RELAY_MAX_FILE_MB", "10"))
 MAX_FILES = 10
 
+# --- reverse proxy & transport security -----------------------------------
+# RELAY_PROXY_HOPS: number of reverse proxies in front of the app (1 for
+# nginx proxy manager). When set, X-Forwarded-For/-Proto/-Host are trusted
+# for that many hops so rate limiting and logs see real client IPs.
+# Leave at 0 if the app is exposed directly, otherwise clients could spoof
+# their IP via forged headers.
+PROXY_HOPS = int(os.environ.get("RELAY_PROXY_HOPS", "0"))
+if PROXY_HOPS:
+    from werkzeug.middleware.proxy_fix import ProxyFix
+    app.wsgi_app = ProxyFix(
+        app.wsgi_app, x_for=PROXY_HOPS, x_proto=PROXY_HOPS, x_host=PROXY_HOPS
+    )
+
+# RELAY_HTTPS=1: the app is served over TLS (directly or via the proxy).
+# Marks session cookies Secure and enables HSTS. Set this for any
+# internet-facing deployment.
+HTTPS = os.environ.get("RELAY_HTTPS", "0") == "1"
+SESSION_HOURS = int(os.environ.get("RELAY_SESSION_HOURS", "12"))
+
 app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=HTTPS,
+    PERMANENT_SESSION_LIFETIME=timedelta(hours=SESSION_HOURS),
     MAX_CONTENT_LENGTH=(MAX_FILE_MB * MAX_FILES + 2) * 1024 * 1024,
 )
+
+
+@app.after_request
+def security_headers(resp):
+    resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+    resp.headers.setdefault("X-Frame-Options", "DENY")
+    resp.headers.setdefault("Referrer-Policy", "same-origin")
+    resp.headers.setdefault(
+        "Content-Security-Policy",
+        "default-src 'self'; "
+        "style-src 'self' https://fonts.googleapis.com; "
+        "font-src https://fonts.gstatic.com; "
+        "img-src 'self' blob:; "
+        "script-src 'self'; "
+        "frame-ancestors 'none'; form-action 'self'; base-uri 'none'",
+    )
+    if HTTPS:
+        resp.headers.setdefault(
+            "Strict-Transport-Security", "max-age=31536000; includeSubDomains"
+        )
+    return resp
+
+
+# --- login rate limiting ---------------------------------------------------
+# Attempts are tracked in SQLite so the limits hold across gunicorn workers
+# and container restarts.
+LOGIN_WINDOW_MIN = 15          # look-back window for counting failures
+MAX_FAILS_PER_IP = 10          # lockout threshold per client IP
+MAX_FAILS_PER_USER = 5         # lockout threshold per username
 
 DISCORD_WEBHOOK_RE = re.compile(
     r"^https://(?:canary\.|ptb\.)?discord(?:app)?\.com/api/webhooks/\d+/[\w-]+$"
 )
 ROLE_MENTION_RE = re.compile(r"<@&(\d+)>")
 MAX_MESSAGE_LEN = 2000
+
+# Dummy hash so unknown usernames take the same time as wrong passwords,
+# which avoids leaking which usernames exist.
+_DUMMY_HASH = generate_password_hash(secrets.token_hex(16))
 
 
 # --------------------------------------------------------------------------
@@ -118,7 +172,20 @@ def init_db():
             status     TEXT NOT NULL,
             created_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS login_attempts (
+            id         INTEGER PRIMARY KEY,
+            ip         TEXT NOT NULL,
+            username   TEXT NOT NULL,
+            ok         INTEGER NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_attempts_time ON login_attempts (created_at);
     """)
+    # Migration for databases created before the hardening pass.
+    try:
+        db.execute("ALTER TABLE audit ADD COLUMN ip TEXT NOT NULL DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass  # column already exists
     # Bootstrap the first admin account if the user table is empty.
     if db.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0:
         username = os.environ.get("ADMIN_USERNAME", "admin")
@@ -208,22 +275,71 @@ def user_webhooks(user):
 # Auth routes
 # --------------------------------------------------------------------------
 
+def client_ip():
+    return request.remote_addr or "unknown"
+
+
+def login_locked(db, ip, username):
+    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=LOGIN_WINDOW_MIN)) \
+        .strftime("%Y-%m-%d %H:%M:%S")
+    ip_fails = db.execute(
+        "SELECT COUNT(*) FROM login_attempts WHERE ok = 0 AND ip = ? AND created_at > ?",
+        (ip, cutoff),
+    ).fetchone()[0]
+    user_fails = db.execute(
+        "SELECT COUNT(*) FROM login_attempts WHERE ok = 0 AND username = ? AND created_at > ?",
+        (username, cutoff),
+    ).fetchone()[0]
+    return ip_fails >= MAX_FAILS_PER_IP or user_fails >= MAX_FAILS_PER_USER
+
+
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
-        username = request.form.get("username", "").strip()
+        username = request.form.get("username", "").strip()[:64]
         password = request.form.get("password", "")
-        user = get_db().execute(
+        ip = client_ip()
+        db = get_db()
+
+        # Trim the attempts table so it can't grow without bound.
+        old = (datetime.now(timezone.utc) - timedelta(hours=24)).strftime("%Y-%m-%d %H:%M:%S")
+        db.execute("DELETE FROM login_attempts WHERE created_at < ?", (old,))
+
+        if login_locked(db, ip, username):
+            db.commit()
+            print(f"[relay] login throttled for '{username}' from {ip}", flush=True)
+            flash(
+                f"Too many failed sign-in attempts. Try again in {LOGIN_WINDOW_MIN} minutes.",
+                "error",
+            )
+            return render_template("login.html"), 429
+
+        user = db.execute(
             "SELECT * FROM users WHERE username = ?", (username,)
         ).fetchone()
-        if user and check_password_hash(user["password_hash"], password):
+        # Always verify against some hash so unknown usernames aren't
+        # distinguishable by response time.
+        valid = check_password_hash(
+            user["password_hash"] if user else _DUMMY_HASH, password
+        )
+        ok = bool(user and valid)
+
+        db.execute(
+            "INSERT INTO login_attempts (ip, username, ok, created_at) VALUES (?, ?, ?, ?)",
+            (ip, username, int(ok), now()),
+        )
+        db.commit()
+
+        if ok:
             session.clear()
             session["uid"] = user["id"]
             session.permanent = True
             dest = request.args.get("next") or url_for("compose")
-            if not dest.startswith("/"):
+            if not dest.startswith("/") or dest.startswith("//"):
                 dest = url_for("compose")
             return redirect(dest)
+
+        print(f"[relay] login failed for '{username}' from {ip}", flush=True)
         flash("That username and password combination wasn't recognised.", "error")
     return render_template("login.html")
 
@@ -344,9 +460,9 @@ def send():
     if files:
         excerpt = (excerpt + f" [+{len(files)} file{'s' if len(files) != 1 else ''}]").strip()
     get_db().execute(
-        "INSERT INTO audit (user_id, username, webhook, excerpt, status, created_at)"
-        " VALUES (?, ?, ?, ?, ?, ?)",
-        (g.user["id"], g.user["username"], hook["name"], excerpt, status, now()),
+        "INSERT INTO audit (user_id, username, webhook, excerpt, status, created_at, ip)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (g.user["id"], g.user["username"], hook["name"], excerpt, status, now(), client_ip()),
     )
     get_db().commit()
 

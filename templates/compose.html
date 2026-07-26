@@ -61,10 +61,7 @@
     </div>
   </section>
 </div>
-<script id="roles-data" type="application/json">{{ roles_json | safe }}</script>
-<script>
-  window.RELAY_LIMITS = { maxFiles: {{ max_files }}, maxFileMB: {{ max_file_mb }} };
-</script>
+<script id="relay-data" type="application/json">{"roles": {{ roles_json | safe }}, "limits": {"maxFiles": {{ max_files }}, "maxFileMB": {{ max_file_mb }}}}</script>
 <script src="{{ url_for('static', filename='preview.js') }}"></script>
 {% endif %}
 {% endblock %}

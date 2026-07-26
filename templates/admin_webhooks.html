@@ -19,7 +19,7 @@
               <button class="btn btn-ghost" type="submit">Test</button>
             </form>
             <form method="post" action="{{ url_for('delete_webhook', hook_id=h.id) }}"
-                  onsubmit="return confirm('Remove {{ h.name }}? Users will lose access to it.');">
+                  data-confirm="Remove this webhook? Users will lose access to it.">
               <input type="hidden" name="csrf" value="{{ csrf_token() }}">
               <button class="btn btn-danger" type="submit">Remove</button>
             </form>
