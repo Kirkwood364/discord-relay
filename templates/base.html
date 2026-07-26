@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Relay{% endblock %}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+{% if g.user %}
+<header class="topbar">
+  <a class="brand" href="{{ url_for('compose') }}">
+    <span class="brand-dot" aria-hidden="true"></span>RELAY
+  </a>
+  <nav>
+    <a href="{{ url_for('compose') }}" {% if request.endpoint == 'compose' %}class="active"{% endif %}>Compose</a>
+    {% if g.user.is_admin %}
+      <a href="{{ url_for('admin_webhooks') }}" {% if request.endpoint == 'admin_webhooks' %}class="active"{% endif %}>Webhooks</a>
+      <a href="{{ url_for('admin_users') }}" {% if request.endpoint == 'admin_users' %}class="active"{% endif %}>Accounts</a>
+      <a href="{{ url_for('admin_access') }}" {% if request.endpoint == 'admin_access' %}class="active"{% endif %}>Access</a>
+      <a href="{{ url_for('admin_audit') }}" {% if request.endpoint == 'admin_audit' %}class="active"{% endif %}>Log</a>
+    {% endif %}
+  </nav>
+  <div class="topbar-right">
+    <a href="{{ url_for('account') }}" class="whoami">{{ g.user.username }}</a>
+    <form method="post" action="{{ url_for('logout') }}">
+      <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+      <button class="btn btn-ghost" type="submit">Sign out</button>
+    </form>
+  </div>
+</header>
+{% endif %}
+
+<main class="{% block main_class %}page{% endblock %}">
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% for category, message in messages %}
+      <div class="flash flash-{{ category }}">{{ message }}</div>
+    {% endfor %}
+  {% endwith %}
+  {% block content %}{% endblock %}
+</main>
+</body>
+</html>

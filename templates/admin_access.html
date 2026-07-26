@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Access · Relay{% endblock %}
+{% block content %}
+<section class="panel">
+  <h1>Access</h1>
+  {% if not users or not hooks %}
+    <p class="muted">
+      You need at least one non-admin account and one webhook before access can be granted.
+      Admins can always post to every webhook.
+    </p>
+  {% else %}
+  <p class="muted">Tick which webhooks each account can post to. Admins always have access to everything.</p>
+  <form method="post">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <table class="access-table">
+      <thead>
+        <tr>
+          <th>Account</th>
+          {% for h in hooks %}<th class="hook-col">{{ h.name }}</th>{% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for u in users %}
+        <tr>
+          <td class="strong">{{ u.username }}</td>
+          {% for h in hooks %}
+          <td class="hook-col">
+            <input type="checkbox" name="grant_{{ u.id }}_{{ h.id }}"
+                   {% if (u.id, h.id) in grants %}checked{% endif %}
+                   aria-label="{{ u.username }} can post to {{ h.name }}">
+          </td>
+          {% endfor %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <button class="btn btn-primary" type="submit">Save access</button>
+  </form>
+  {% endif %}
+</section>
+{% endblock %}

@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}Accounts · Relay{% endblock %}
+{% block content %}
+<div class="admin-grid">
+  <section class="panel">
+    <h1>Accounts</h1>
+    <table>
+      <thead><tr><th>Username</th><th>Role</th><th>Created</th><th></th></tr></thead>
+      <tbody>
+        {% for u in users %}
+        <tr>
+          <td class="strong">{{ u.username }}</td>
+          <td>{% if u.is_admin %}<span class="tag tag-admin">admin</span>{% else %}<span class="tag">user</span>{% endif %}</td>
+          <td class="muted">{{ u.created_at[:10] }}</td>
+          <td class="row-actions">
+            <details class="reset">
+              <summary class="btn btn-ghost">Reset password</summary>
+              <form method="post" action="{{ url_for('reset_password', user_id=u.id) }}">
+                <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+                <input name="password" type="password" placeholder="New password" minlength="8" required>
+                <button class="btn btn-primary" type="submit">Set</button>
+              </form>
+            </details>
+            {% if u.id != g.user.id %}
+            <form method="post" action="{{ url_for('delete_user', user_id=u.id) }}"
+                  onsubmit="return confirm('Delete {{ u.username }}?');">
+              <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+              <button class="btn btn-danger" type="submit">Delete</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+
+  <section class="panel">
+    <h2>Create an account</h2>
+    <form method="post">
+      <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+      <label for="username">Username</label>
+      <input id="username" name="username" required>
+      <label for="password">Password <span class="hint">at least 8 characters</span></label>
+      <input id="password" name="password" type="password" minlength="8" required>
+      <label class="check">
+        <input type="checkbox" name="is_admin"> Admin — can manage webhooks, accounts, and access
+      </label>
+      <button class="btn btn-primary" type="submit">Create account</button>
+    </form>
+  </section>
+</div>
+{% endblock %}

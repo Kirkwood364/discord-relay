@@ -1,0 +1,17 @@
+services:
+  relay:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - relay-data:/data
+    environment:
+      # Set this before first run, or a random admin password
+      # will be generated and printed once in the container logs.
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
+      # - ADMIN_USERNAME=admin
+      # - SECRET_KEY=            # optional; auto-generated and persisted if unset
+    restart: unless-stopped
+
+volumes:
+  relay-data:

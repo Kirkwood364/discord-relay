@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block title %}Compose · Relay{% endblock %}
+{% block content %}
+{% if not webhooks %}
+  <div class="empty">
+    <h1>No channels yet</h1>
+    <p>You don't have access to any webhooks. Ask an admin to grant you one on the Access page.</p>
+  </div>
+{% else %}
+<div class="compose-grid">
+  <section class="panel">
+    <h1>Compose</h1>
+    <form method="post" action="{{ url_for('send') }}" id="send-form" enctype="multipart/form-data">
+      <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+      <label for="webhook_id">Destination</label>
+      <select id="webhook_id" name="webhook_id">
+        {% for w in webhooks %}
+          <option value="{{ w.id }}">{{ w.name }}{% if w.note %} — {{ w.note }}{% endif %}</option>
+        {% endfor %}
+      </select>
+
+      <label for="content">Message <span class="hint">Discord markdown works: **bold**, *italic*, `code`, &gt; quote</span></label>
+      <textarea id="content" name="content" rows="10" maxlength="2000"
+        placeholder="Write the announcement…"></textarea>
+
+      <div id="role-bar" class="role-bar" hidden>
+        <span class="hint">Tag a role:</span>
+        <span id="role-chips"></span>
+      </div>
+
+      <label for="files">Attachments
+        <span class="hint">up to {{ max_files }} files, {{ max_file_mb }} MB each</span>
+      </label>
+      <input id="files" name="files" type="file" multiple>
+      <div id="file-error" class="hint file-error" hidden></div>
+
+      <div class="compose-footer">
+        <span id="char-count" class="hint">0 / 2000</span>
+        <button class="btn btn-primary" type="submit" id="send-btn" disabled>Send to Discord</button>
+      </div>
+    </form>
+    <p class="hint">Messages are sent under the channel webhook's name and avatar — never yours.
+      Only roles registered by an admin will actually ping; @everyone, @here, and user mentions are always stripped.</p>
+  </section>
+
+  <section class="panel panel-preview">
+    <h2>Preview</h2>
+    <div class="discord-frame">
+      <div class="discord-msg">
+        <div class="discord-avatar" id="pv-avatar" aria-hidden="true">R</div>
+        <div class="discord-body">
+          <div class="discord-meta">
+            <span class="discord-name" id="pv-name">Webhook</span>
+            <span class="discord-bot">APP</span>
+            <span class="discord-time" id="pv-time"></span>
+          </div>
+          <div class="discord-content" id="pv-content"><span class="pv-placeholder">Your message will appear here as it will look in Discord.</span></div>
+          <div class="discord-attachments" id="pv-attachments"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+</div>
+<script id="roles-data" type="application/json">{{ roles_json | safe }}</script>
+<script>
+  window.RELAY_LIMITS = { maxFiles: {{ max_files }}, maxFileMB: {{ max_file_mb }} };
+</script>
+<script src="{{ url_for('static', filename='preview.js') }}"></script>
+{% endif %}
+{% endblock %}

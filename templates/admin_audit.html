@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Log · Relay{% endblock %}
+{% block content %}
+<section class="panel">
+  <h1>Send log</h1>
+  <p class="muted">Only admins can see this. Discord itself never learns who pressed send.</p>
+  {% if rows %}
+  <table>
+    <thead><tr><th>When (UTC)</th><th>Account</th><th>Webhook</th><th>Excerpt</th><th>Status</th></tr></thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td class="muted">{{ r.created_at }}</td>
+        <td class="strong">{{ r.username }}</td>
+        <td>{{ r.webhook }}</td>
+        <td class="muted excerpt">{{ r.excerpt }}</td>
+        <td>{% if r.status == 'sent' %}<span class="tag tag-ok">sent</span>{% else %}<span class="tag tag-bad">{{ r.status }}</span>{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">Nothing has been sent yet.</p>
+  {% endif %}
+</section>
+{% endblock %}

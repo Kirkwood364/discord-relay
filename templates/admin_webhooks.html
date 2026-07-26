@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block title %}Webhooks · Relay{% endblock %}
+{% block content %}
+<div class="admin-grid">
+  <section class="panel">
+    <h1>Webhooks</h1>
+    {% if hooks %}
+    <table>
+      <thead><tr><th>Name</th><th>Note</th><th>Added</th><th></th></tr></thead>
+      <tbody>
+        {% for h in hooks %}
+        <tr>
+          <td class="strong">{{ h.name }}</td>
+          <td class="muted">{{ h.note or "—" }}</td>
+          <td class="muted">{{ h.created_at[:10] }}</td>
+          <td class="row-actions">
+            <form method="post" action="{{ url_for('test_webhook', hook_id=h.id) }}">
+              <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+              <button class="btn btn-ghost" type="submit">Test</button>
+            </form>
+            <form method="post" action="{{ url_for('delete_webhook', hook_id=h.id) }}"
+                  onsubmit="return confirm('Remove {{ h.name }}? Users will lose access to it.');">
+              <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+              <button class="btn btn-danger" type="submit">Remove</button>
+            </form>
+          </td>
+        </tr>
+        <tr class="roles-row">
+          <td colspan="4">
+            <details class="roles-details">
+              <summary>
+                Taggable roles
+                <span class="tag">{{ roles.get(h.id, []) | length }}</span>
+              </summary>
+              <div class="roles-body">
+                {% if roles.get(h.id) %}
+                  <ul class="roles-list">
+                    {% for r in roles[h.id] %}
+                    <li>
+                      <span class="mention-pill">@{{ r.name }}</span>
+                      <span class="muted mono">{{ r.role_id }}</span>
+                      <form method="post" action="{{ url_for('delete_role', role_id=r.id) }}">
+                        <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+                        <button class="btn btn-danger" type="submit">Remove</button>
+                      </form>
+                    </li>
+                    {% endfor %}
+                  </ul>
+                {% else %}
+                  <p class="muted">No roles registered — users can't ping anything through this webhook.</p>
+                {% endif %}
+                <form method="post" action="{{ url_for('add_role', hook_id=h.id) }}" class="role-add">
+                  <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+                  <input name="name" placeholder="Role name, e.g. Moderators" required>
+                  <input name="role_id" placeholder="Role ID" pattern="\d+" inputmode="numeric" required>
+                  <button class="btn btn-primary" type="submit">Allow tagging</button>
+                </form>
+                <p class="hint">In Discord: Server Settings → Roles → ⋯ → Copy Role ID (Developer Mode must be on). Only registered roles will actually ping.</p>
+              </div>
+            </details>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="muted">No webhooks yet. Add the first one — in Discord: channel settings → Integrations → Webhooks → copy the URL.</p>
+    {% endif %}
+  </section>
+
+  <section class="panel">
+    <h2>Add a webhook</h2>
+    <form method="post">
+      <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+      <label for="name">Name <span class="hint">what users see, e.g. “#announcements”</span></label>
+      <input id="name" name="name" required>
+      <label for="url">Discord webhook URL</label>
+      <input id="url" name="url" type="url" placeholder="https://discord.com/api/webhooks/…" required>
+      <label for="note">Note <span class="hint">optional</span></label>
+      <input id="note" name="note" placeholder="e.g. main server, mods only">
+      <button class="btn btn-primary" type="submit">Add webhook</button>
+    </form>
+    <p class="hint">The URL is stored server-side and never shown to non-admin users.</p>
+  </section>
+</div>
+{% endblock %}
