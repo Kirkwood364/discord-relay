@@ -43,6 +43,7 @@ Users sign in, pick a destination, write their message with a live preview, and 
 | `RELAY_HTTPS` | `0` | Set `1` when served over TLS: Secure cookies + HSTS |
 | `RELAY_SESSION_HOURS` | `12` | Login session lifetime |
 | `RELAY_MAX_FILE_MB` | `10` | Per-file attachment limit (raise for boosted servers) |
+| `RELAY_URL_PREFIX` | *(none)* | Serve under a subpath, e.g. `/relay`, instead of a domain root |
 | `DATA_DIR` | `/data` | Where the SQLite database and secret key live |
 
 All state lives in the `/data` volume (`relay-data` in docker-compose), so the container itself is disposable.
@@ -67,7 +68,9 @@ Running behind a reverse proxy (nginx proxy manager, Caddy, Traefik):
    client_max_body_size 102m;
    ```
 
-3. Strongly consider an **Access List** (IP allowlist or basic auth) in front. This is a tool for a handful of trusted people — reducing who can even reach the login page removes most of the risk of public exposure.
+3. To serve it under a subpath of a domain you already use (e.g. `https://example.com/relay`) rather than its own subdomain, set `RELAY_URL_PREFIX=/relay` and add a **Custom location** of `/relay` to that domain's existing proxy host, pointing at the relay container on port 8080. No extra DNS record or certificate is needed. The app rewrites its own links, and scopes its session cookie to the subpath so it isn't shared with other apps on the domain.
+
+4. Strongly consider an **Access List** (IP allowlist or basic auth) in front. This is a tool for a handful of trusted people — reducing who can even reach the login page removes most of the risk of public exposure.
 
 ### Upgrading / troubleshooting
 

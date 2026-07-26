@@ -67,10 +67,39 @@ if PROXY_HOPS:
 HTTPS = os.environ.get("RELAY_HTTPS", "0") == "1"
 SESSION_HOURS = int(os.environ.get("RELAY_SESSION_HOURS", "12"))
 
+# RELAY_URL_PREFIX: serve the app under a subpath of an existing domain,
+# e.g. "/relay" for https://example.com/relay. The proxy must strip the
+# prefix before forwarding; this tells the app to put it back when
+# generating URLs, so links, form actions and redirects stay correct.
+URL_PREFIX = "/" + os.environ.get("RELAY_URL_PREFIX", "").strip().strip("/")
+URL_PREFIX = "" if URL_PREFIX == "/" else URL_PREFIX
+
+if URL_PREFIX:
+    class _PrefixMiddleware:
+        """Set SCRIPT_NAME so Flask generates prefixed URLs."""
+
+        def __init__(self, wsgi_app, prefix):
+            self.wsgi_app = wsgi_app
+            self.prefix = prefix
+
+        def __call__(self, environ, start_response):
+            environ["SCRIPT_NAME"] = self.prefix
+            path = environ.get("PATH_INFO", "")
+            # Tolerate a proxy that forwards the prefix instead of stripping it.
+            if path.startswith(self.prefix):
+                environ["PATH_INFO"] = path[len(self.prefix):] or "/"
+            return self.wsgi_app(environ, start_response)
+
+    app.wsgi_app = _PrefixMiddleware(app.wsgi_app, URL_PREFIX)
+
 app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE="Lax",
     SESSION_COOKIE_SECURE=HTTPS,
+    # Scope the session cookie to the app's own path so it isn't sent to
+    # other apps sharing the domain.
+    SESSION_COOKIE_PATH=URL_PREFIX or "/",
+    APPLICATION_ROOT=URL_PREFIX or "/",
     PERMANENT_SESSION_LIFETIME=timedelta(hours=SESSION_HOURS),
     MAX_CONTENT_LENGTH=(MAX_FILE_MB * MAX_FILES + 2) * 1024 * 1024,
 )
