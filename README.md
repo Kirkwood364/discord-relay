@@ -7,6 +7,8 @@ A small self-hosted gateway that lets trusted users post to Discord channels thr
 - **Authenticated logon** — session-based login, hashed passwords, per-user accounts.
 - **Admin-managed webhooks** — register any number of Discord webhooks by name; users only ever see the friendly name, never the URL.
 - **Per-user access control** — a checkbox matrix on the Access page controls which accounts can post to which webhooks. Admins can post to all of them.
+- **Webhook identity in the preview** — when a webhook is added (or re-Tested), the relay fetches its Discord display name and avatar, and the preview shows the message exactly as that identity.
+- **Edit posted messages** — expand "Edit a message this webhook already posted" on the compose page, paste the message link, and Load pulls the current text into the editor; sending updates the message in place. Discord only permits a webhook to edit its own messages, so users can never touch anything else. Edits are audited.
 - **Live Discord-style preview** — the compose page renders your message (bold, italic, code blocks, quotes, headings, spoilers, lists) exactly as it will appear in Discord before you send it.
 - **Send log** — admin-only audit trail of who sent what, where, and whether Discord accepted it. Discord itself never learns the poster's identity.
 - **Safety rails** — CSRF protection on every form, webhook URL format validation, `@everyone`/role mentions stripped from outgoing messages, 2000-character limit enforced.

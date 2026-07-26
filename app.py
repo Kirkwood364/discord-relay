@@ -115,7 +115,7 @@ def security_headers(resp):
         "default-src 'self'; "
         "style-src 'self' https://fonts.googleapis.com; "
         "font-src https://fonts.gstatic.com; "
-        "img-src 'self' blob:; "
+        "img-src 'self' blob: https://cdn.discordapp.com; "
         "script-src 'self'; "
         "frame-ancestors 'none'; form-action 'self'; base-uri 'none'",
     )
@@ -137,6 +137,9 @@ DISCORD_WEBHOOK_RE = re.compile(
     r"^https://(?:canary\.|ptb\.)?discord(?:app)?\.com/api/webhooks/\d+/[\w-]+$"
 )
 ROLE_MENTION_RE = re.compile(r"<@&(\d+)>")
+MESSAGE_LINK_RE = re.compile(
+    r"(?:https?://(?:canary\.|ptb\.)?discord(?:app)?\.com/channels/(?:\d+|@me)/\d+/)?(\d{15,25})$"
+)
 MAX_MESSAGE_LEN = 2000
 
 # Dummy hash so unknown usernames take the same time as wrong passwords,
@@ -222,6 +225,16 @@ def init_db():
     # Migration for databases created before the hardening pass. Check the
     # schema rather than catching OperationalError, which would also swallow
     # genuine lock errors.
+    wcols = {r[1] for r in db.execute("PRAGMA table_info(webhooks)").fetchall()}
+    for col in ("d_name", "d_avatar"):
+        if col not in wcols:
+            try:
+                db.execute(f"ALTER TABLE webhooks ADD COLUMN {col} TEXT NOT NULL DEFAULT ''")
+                db.commit()
+            except sqlite3.OperationalError as exc:
+                if "duplicate column" not in str(exc).lower():
+                    raise
+
     cols = {r[1] for r in db.execute("PRAGMA table_info(audit)").fetchall()}
     if "ip" not in cols:
         try:
@@ -438,7 +451,7 @@ def account():
 
 @app.route("/")
 @login_required
-def compose():
+def compose(**kwargs):
     hooks = user_webhooks(g.user)
     roles = {}
     if hooks:
@@ -451,9 +464,54 @@ def compose():
             roles.setdefault(r["webhook_id"], []).append(
                 {"name": r["name"], "role_id": r["role_id"]}
             )
+    hook_info = {
+        str(w["id"]): {"name": w["d_name"] or "", "avatar": w["d_avatar"] or ""}
+        for w in hooks
+    }
     return render_template(
         "compose.html", webhooks=hooks, roles_json=json.dumps(roles),
+        hooks_json=json.dumps(hook_info),
         max_files=MAX_FILES, max_file_mb=MAX_FILE_MB,
+        edit_id=kwargs.get("edit_id"), edit_content=kwargs.get("edit_content"),
+        edit_webhook_id=kwargs.get("edit_webhook_id"),
+    )
+
+
+@app.route("/load_message", methods=["POST"])
+@login_required
+def load_message():
+    """Fetch an existing webhook-authored message so it can be edited."""
+    webhook_id = request.form.get("webhook_id", "")
+    link = request.form.get("message_url", "").strip()
+
+    allowed = {str(w["id"]): w for w in user_webhooks(g.user)}
+    hook = allowed.get(webhook_id)
+    if hook is None:
+        abort(403)
+
+    m = MESSAGE_LINK_RE.match(link)
+    if not m:
+        flash("Paste a Discord message link (right-click the message → Copy Message Link).", "error")
+        return redirect(url_for("compose"))
+    message_id = m.group(1)
+
+    try:
+        resp = requests.get(f"{hook['url']}/messages/{message_id}", timeout=10)
+    except requests.RequestException:
+        flash("Couldn't reach Discord to load the message.", "error")
+        return redirect(url_for("compose"))
+
+    if resp.status_code != 200:
+        flash(
+            f"Discord couldn't find that message for {hook['name']}. Only messages"
+            " posted through this exact webhook can be edited — check the link and"
+            " the selected destination.", "error",
+        )
+        return redirect(url_for("compose"))
+
+    content = resp.json().get("content", "")
+    return compose(
+        edit_id=message_id, edit_content=content, edit_webhook_id=hook["id"]
     )
 
 
@@ -463,7 +521,16 @@ def send():
     webhook_id = request.form.get("webhook_id", "")
     content = request.form.get("content", "").strip()
     uploads = [f for f in request.files.getlist("files") if f and f.filename]
+    edit_id = request.form.get("edit_id", "").strip()
+    if edit_id and not edit_id.isdigit():
+        abort(400)
 
+    if edit_id and uploads:
+        flash("Attachments can't be changed when editing — only the message text.", "error")
+        return redirect(url_for("compose"))
+    if edit_id and not content:
+        flash("An edited message can't be empty. To remove a message, delete it in Discord.", "error")
+        return redirect(url_for("compose"))
     if not content and not uploads:
         flash("The message is empty — nothing was sent.", "error")
         return redirect(url_for("compose"))
@@ -502,19 +569,27 @@ def send():
     }
 
     try:
-        if files:
+        if edit_id:
+            resp = requests.patch(
+                f"{hook['url']}/messages/{edit_id}", json=payload, timeout=10
+            )
+            ok = resp.status_code == 200
+            status = "edited" if ok else f"edit failed ({resp.status_code})"
+        elif files:
             resp = requests.post(
                 hook["url"],
                 data={"payload_json": json.dumps(payload)},
                 files=files,
                 timeout=60,
             )
+            ok = resp.status_code in (200, 204)
+            status = "sent" if ok else f"failed ({resp.status_code})"
         else:
             resp = requests.post(hook["url"], json=payload, timeout=10)
-        ok = resp.status_code in (200, 204)
-        status = "sent" if ok else f"failed ({resp.status_code})"
+            ok = resp.status_code in (200, 204)
+            status = "sent" if ok else f"failed ({resp.status_code})"
     except requests.RequestException:
-        ok, status = False, "failed (network error)"
+        ok, status = False, ("edit failed (network error)" if edit_id else "failed (network error)")
 
     excerpt = content[:120]
     if files:
@@ -526,16 +601,39 @@ def send():
     )
     get_db().commit()
 
-    if ok:
+    if ok and edit_id:
+        flash(f"Message edited in {hook['name']}.", "ok")
+    elif ok:
         flash(f"Message sent to {hook['name']}.", "ok")
     else:
-        flash(f"Discord rejected the message — {status}. Check the webhook still exists.", "error")
+        flash(f"Discord rejected the request — {status}. Check the webhook still exists.", "error")
     return redirect(url_for("compose"))
 
 
 # --------------------------------------------------------------------------
 # Admin — webhooks
 # --------------------------------------------------------------------------
+
+def fetch_hook_identity(url):
+    """Ask Discord for the webhook's display name and avatar CDN URL.
+
+    Returns (name, avatar_url) or None if unreachable/invalid.
+    """
+    try:
+        resp = requests.get(url, timeout=10)
+        if resp.status_code != 200:
+            return None
+        info = resp.json()
+        name = info.get("name") or ""
+        avatar = ""
+        if info.get("id") and info.get("avatar"):
+            avatar = (
+                f"https://cdn.discordapp.com/avatars/{info['id']}/{info['avatar']}.png?size=128"
+            )
+        return name, avatar
+    except (requests.RequestException, ValueError):
+        return None
+
 
 @app.route("/admin/webhooks", methods=["GET", "POST"])
 @admin_required
@@ -550,13 +648,21 @@ def admin_webhooks():
         elif not DISCORD_WEBHOOK_RE.match(url):
             flash("That doesn't look like a Discord webhook URL.", "error")
         else:
+            identity = fetch_hook_identity(url) or ("", "")
             try:
                 db.execute(
-                    "INSERT INTO webhooks (name, url, note, created_at) VALUES (?, ?, ?, ?)",
-                    (name, url, note, now()),
+                    "INSERT INTO webhooks (name, url, note, created_at, d_name, d_avatar)"
+                    " VALUES (?, ?, ?, ?, ?, ?)",
+                    (name, url, note, now(), identity[0], identity[1]),
                 )
                 db.commit()
-                flash(f"Added webhook {name}.", "ok")
+                if identity[0]:
+                    flash(f"Added webhook {name} — posts to Discord as “{identity[0]}”.", "ok")
+                else:
+                    flash(
+                        f"Added webhook {name}, but couldn't fetch its Discord identity yet"
+                        " — use Test to retry.", "ok",
+                    )
             except sqlite3.IntegrityError:
                 flash("A webhook with that name already exists.", "error")
         return redirect(url_for("admin_webhooks"))
@@ -582,17 +688,16 @@ def test_webhook(hook_id):
     hook = get_db().execute("SELECT * FROM webhooks WHERE id = ?", (hook_id,)).fetchone()
     if hook is None:
         abort(404)
-    try:
-        resp = requests.get(hook["url"], timeout=10)
-        if resp.status_code == 200:
-            info = resp.json()
-            flash(
-                f"Webhook is live — posts as “{info.get('name', 'unknown')}”.", "ok"
-            )
-        else:
-            flash(f"Discord returned {resp.status_code} — the webhook may have been deleted.", "error")
-    except requests.RequestException:
-        flash("Couldn't reach Discord to test the webhook.", "error")
+    identity = fetch_hook_identity(hook["url"])
+    if identity:
+        get_db().execute(
+            "UPDATE webhooks SET d_name = ?, d_avatar = ? WHERE id = ?",
+            (identity[0], identity[1], hook_id),
+        )
+        get_db().commit()
+        flash(f"Webhook is live — posts as “{identity[0] or 'unknown'}”. Identity refreshed.", "ok")
+    else:
+        flash("Couldn't reach the webhook — it may have been deleted in Discord.", "error")
     return redirect(url_for("admin_webhooks"))
 
 

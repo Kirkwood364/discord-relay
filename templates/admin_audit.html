@@ -15,7 +15,7 @@
         <td class="muted mono">{{ r.ip or "—" }}</td>
         <td>{{ r.webhook }}</td>
         <td class="muted excerpt">{{ r.excerpt }}</td>
-        <td>{% if r.status == 'sent' %}<span class="tag tag-ok">sent</span>{% else %}<span class="tag tag-bad">{{ r.status }}</span>{% endif %}</td>
+        <td>{% if r.status in ('sent', 'edited') %}<span class="tag tag-ok">{{ r.status }}</span>{% else %}<span class="tag tag-bad">{{ r.status }}</span>{% endif %}</td>
       </tr>
       {% endfor %}
     </tbody>

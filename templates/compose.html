@@ -12,32 +12,58 @@
     <h1>Compose</h1>
     <form method="post" action="{{ url_for('send') }}" id="send-form" enctype="multipart/form-data">
       <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+      {% if edit_id %}
+        <input type="hidden" name="edit_id" value="{{ edit_id }}">
+        <div class="edit-banner">
+          Editing an existing message in this channel — sending will update it in place.
+          <a href="{{ url_for('compose') }}">Cancel</a>
+        </div>
+      {% endif %}
       <label for="webhook_id">Destination</label>
       <select id="webhook_id" name="webhook_id">
         {% for w in webhooks %}
-          <option value="{{ w.id }}">{{ w.name }}{% if w.note %} — {{ w.note }}{% endif %}</option>
+          <option value="{{ w.id }}"
+            {% if edit_webhook_id == w.id %}selected{% endif %}
+            {% if edit_id and edit_webhook_id != w.id %}disabled{% endif %}
+          >{{ w.name }}{% if w.note %} — {{ w.note }}{% endif %}</option>
         {% endfor %}
       </select>
 
       <label for="content">Message <span class="hint">Discord markdown works: **bold**, *italic*, `code`, &gt; quote</span></label>
       <textarea id="content" name="content" rows="10" maxlength="2000"
-        placeholder="Write the announcement…"></textarea>
+        placeholder="Write the announcement…">{{ edit_content or "" }}</textarea>
 
       <div id="role-bar" class="role-bar" hidden>
         <span class="hint">Tag a role:</span>
         <span id="role-chips"></span>
       </div>
 
+      {% if not edit_id %}
       <label for="files">Attachments
         <span class="hint">up to {{ max_files }} files, {{ max_file_mb }} MB each</span>
       </label>
       <input id="files" name="files" type="file" multiple>
       <div id="file-error" class="hint file-error" hidden></div>
+      {% endif %}
 
       <div class="compose-footer">
         <span id="char-count" class="hint">0 / 2000</span>
-        <button class="btn btn-primary" type="submit" id="send-btn" disabled>Send to Discord</button>
+        <button class="btn btn-primary" type="submit" id="send-btn" disabled>
+          {{ "Save edit" if edit_id else "Send to Discord" }}
+        </button>
       </div>
+
+      {% if not edit_id %}
+      <details class="edit-loader">
+        <summary>Edit a message this webhook already posted</summary>
+        <div class="edit-loader-body">
+          <input name="message_url" placeholder="Paste the message link (right-click → Copy Message Link)">
+          <button class="btn btn-ghost" type="submit"
+                  formaction="{{ url_for('load_message') }}" formnovalidate>Load</button>
+        </div>
+        <p class="hint">Pick the destination above first — only messages posted through that webhook can be loaded and edited.</p>
+      </details>
+      {% endif %}
     </form>
     <p class="hint">Messages are sent under the channel webhook's name and avatar — never yours.
       Only roles registered by an admin will actually ping; @everyone, @here, and user mentions are always stripped.</p>
@@ -61,7 +87,7 @@
     </div>
   </section>
 </div>
-<script id="relay-data" type="application/json">{"roles": {{ roles_json | safe }}, "limits": {"maxFiles": {{ max_files }}, "maxFileMB": {{ max_file_mb }}}}</script>
+<script id="relay-data" type="application/json">{"roles": {{ roles_json | safe }}, "hooks": {{ hooks_json | safe }}, "limits": {"maxFiles": {{ max_files }}, "maxFileMB": {{ max_file_mb }}}}</script>
 <script src="{{ url_for('static', filename='preview.js') }}"></script>
 {% endif %}
 {% endblock %}

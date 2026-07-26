@@ -16,6 +16,7 @@
 
   const relayData = JSON.parse(document.getElementById("relay-data").textContent || "{}");
   const rolesByHook = relayData.roles || {};
+  const hookInfo = relayData.hooks || {};
   const limits = relayData.limits || { maxFiles: 10, maxFileMB: 10 };
   let objectUrls = [];
 
@@ -48,9 +49,13 @@
       .replace(/(https?:\/\/[^\s<]+)/g, '<span class="link">$1</span>');
   }
 
+  function fileCount() {
+    return fileInput ? fileInput.files.length : 0;
+  }
+
   function render(text) {
     if (!text.trim()) {
-      return fileInput.files.length
+      return fileCount()
         ? ""
         : '<span class="pv-placeholder">Your message will appear here as it will look in Discord.</span>';
     }
@@ -84,6 +89,7 @@
     objectUrls.forEach((u) => URL.revokeObjectURL(u));
     objectUrls = [];
     pvAttachments.innerHTML = "";
+    if (!fileInput) return true;
     const files = Array.from(fileInput.files);
 
     let error = "";
@@ -148,13 +154,27 @@
     const filesOk = renderAttachments();
     out.innerHTML = render(input.value);
     counter.textContent = input.value.length + " / 2000";
-    sendBtn.disabled = !(input.value.trim() || fileInput.files.length) || !filesOk;
+    sendBtn.disabled = !(input.value.trim() || fileCount()) || !filesOk;
   }
 
   function updateIdentity() {
     const label = select.options[select.selectedIndex].text.split(" — ")[0];
-    name.textContent = label;
-    avatar.textContent = label.replace(/^#/, "").trim().charAt(0).toUpperCase() || "R";
+    const info = hookInfo[select.value] || {};
+    // Prefer the webhook's real Discord identity when we have it cached.
+    name.textContent = info.name || label;
+    avatar.innerHTML = "";
+    if (info.avatar) {
+      const img = document.createElement("img");
+      img.src = info.avatar;
+      img.alt = "";
+      img.addEventListener("error", () => {
+        avatar.innerHTML = "";
+        avatar.textContent = (info.name || label).replace(/^#/, "").trim().charAt(0).toUpperCase() || "R";
+      });
+      avatar.appendChild(img);
+    } else {
+      avatar.textContent = (info.name || label).replace(/^#/, "").trim().charAt(0).toUpperCase() || "R";
+    }
     renderRoleChips();
     update();
   }
@@ -163,7 +183,7 @@
   time.textContent = "Today at " + now.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 
   input.addEventListener("input", update);
-  fileInput.addEventListener("change", update);
+  if (fileInput) fileInput.addEventListener("change", update);
   select.addEventListener("change", updateIdentity);
   updateIdentity();
 })();
