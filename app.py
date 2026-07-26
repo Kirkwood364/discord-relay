@@ -121,9 +121,11 @@ _DUMMY_HASH = generate_password_hash(secrets.token_hex(16))
 
 def get_db():
     if "db" not in g:
-        g.db = sqlite3.connect(DB_PATH)
+        g.db = sqlite3.connect(DB_PATH, timeout=30)
         g.db.row_factory = sqlite3.Row
         g.db.execute("PRAGMA foreign_keys = ON")
+        # Wait rather than erroring if another worker holds the write lock.
+        g.db.execute("PRAGMA busy_timeout = 30000")
     return g.db
 
 
@@ -135,7 +137,13 @@ def close_db(_exc):
 
 
 def init_db():
-    db = sqlite3.connect(DB_PATH)
+    # Multiple gunicorn workers may start at once, so everything here has to
+    # tolerate a concurrent run: WAL + a busy timeout for locking, an
+    # exclusive transaction around the bootstrap check, and IntegrityError
+    # treated as "another worker already did it".
+    db = sqlite3.connect(DB_PATH, timeout=30)
+    db.execute("PRAGMA journal_mode = WAL")
+    db.execute("PRAGMA busy_timeout = 30000")
     db.executescript("""
         CREATE TABLE IF NOT EXISTS users (
             id            INTEGER PRIMARY KEY,
@@ -181,27 +189,50 @@ def init_db():
         );
         CREATE INDEX IF NOT EXISTS idx_attempts_time ON login_attempts (created_at);
     """)
-    # Migration for databases created before the hardening pass.
+
+    # Migration for databases created before the hardening pass. Check the
+    # schema rather than catching OperationalError, which would also swallow
+    # genuine lock errors.
+    cols = {r[1] for r in db.execute("PRAGMA table_info(audit)").fetchall()}
+    if "ip" not in cols:
+        try:
+            db.execute("ALTER TABLE audit ADD COLUMN ip TEXT NOT NULL DEFAULT ''")
+            db.commit()
+        except sqlite3.OperationalError as exc:
+            if "duplicate column" not in str(exc).lower():
+                raise
+
+    # Bootstrap the first admin account if there are no users yet.
+    username = os.environ.get("ADMIN_USERNAME", "admin")
+    password = os.environ.get("ADMIN_PASSWORD") or secrets.token_urlsafe(12)
+    created = False
     try:
-        db.execute("ALTER TABLE audit ADD COLUMN ip TEXT NOT NULL DEFAULT ''")
-    except sqlite3.OperationalError:
-        pass  # column already exists
-    # Bootstrap the first admin account if the user table is empty.
-    if db.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0:
-        username = os.environ.get("ADMIN_USERNAME", "admin")
-        password = os.environ.get("ADMIN_PASSWORD") or secrets.token_urlsafe(12)
-        db.execute(
-            "INSERT INTO users (username, password_hash, is_admin, created_at)"
-            " VALUES (?, ?, 1, ?)",
-            (username, generate_password_hash(password), now()),
-        )
+        # BEGIN IMMEDIATE takes the write lock up front, so a second worker
+        # waits here and then sees the row the first one inserted.
+        db.execute("BEGIN IMMEDIATE")
+        if db.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0:
+            db.execute(
+                "INSERT INTO users (username, password_hash, is_admin, created_at)"
+                " VALUES (?, ?, 1, ?)",
+                (username, generate_password_hash(password), now()),
+            )
+            created = True
         db.commit()
+    except sqlite3.IntegrityError:
+        # Another worker created the account between our check and insert.
+        db.rollback()
+    finally:
+        db.close()
+
+    if created:
         if os.environ.get("ADMIN_PASSWORD"):
-            print(f"[relay] Created admin account '{username}' with password from ADMIN_PASSWORD.")
+            print(f"[relay] Created admin account '{username}' with password from ADMIN_PASSWORD.",
+                  flush=True)
         else:
-            print(f"[relay] Created admin account '{username}' with generated password: {password}")
-            print("[relay] Log in and change it, or set ADMIN_PASSWORD before first run.")
-    db.close()
+            print(f"[relay] Created admin account '{username}' with generated password: {password}",
+                  flush=True)
+            print("[relay] Log in and change it, or set ADMIN_PASSWORD before first run.",
+                  flush=True)
 
 
 def now():

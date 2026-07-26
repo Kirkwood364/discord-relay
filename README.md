@@ -69,6 +69,12 @@ Running behind a reverse proxy (nginx proxy manager, Caddy, Traefik):
 
 3. Strongly consider an **Access List** (IP allowlist or basic auth) in front. This is a tool for a handful of trusted people — reducing who can even reach the login page removes most of the risk of public exposure.
 
+### Upgrading / troubleshooting
+
+The schema is created and migrated automatically at startup, and startup is safe to run concurrently across gunicorn workers, so rebuilding the image over an existing `relay-data` volume is all that's needed to upgrade.
+
+If the container exits with `Worker failed to boot`, check the log line above the traceback — the app prints its own errors prefixed with `[relay]`. The database uses WAL mode with a 30-second busy timeout, so brief write contention between workers waits rather than failing.
+
 Back up the `relay-data` volume; it contains the accounts, webhook URLs, and audit log.
 
 ## Project layout
